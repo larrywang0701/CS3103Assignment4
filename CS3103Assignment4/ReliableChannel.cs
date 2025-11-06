@@ -33,6 +33,9 @@ namespace CS3103Assignment4
         private Dictionary<uint, SentDataPacket> _sentPackets = new Dictionary<uint, SentDataPacket>();
         private Dictionary<uint, ReceivedDataPacket> _receivedPackets = new Dictionary<uint, ReceivedDataPacket>();
 
+        private Dictionary<uint, float> _missingPacketTimers = new Dictionary<uint, float>();
+        private const float MissingPacketTimeout = 0.2f;
+
         public void ListenForConnection()
         {
             this._sendBuffer = new byte[_sendBufferLength];
@@ -96,21 +99,29 @@ namespace CS3103Assignment4
                     this.Log("establishing connection has timed out");
                 }
             }
+
+            var keys = _missingPacketTimers.Keys.ToList();
+            foreach (var seq in keys)
+            {
+                _missingPacketTimers[seq] += deltaSeconds;
+            }
+
+            TryProcessInOrderPackets();
         }
 
         public override void OnReceivedData(byte[] data)
         {
             this._receiveBuffer = data;
-            if(this._receiveBuffer is null)
+            if (this._receiveBuffer is null)
             {
                 return;
             }
             int receivedLength = this._receiveBuffer.Length;
             this._receiveBufferNextReadIndex = 0;
-            while(this._receiveBufferNextReadIndex < receivedLength)
+            while (this._receiveBufferNextReadIndex < receivedLength)
             {
                 this.ProcessReceivedPacket();
-                if(this._reliableChannelState == ReliableChannelState.NotConnected)
+                if (this._reliableChannelState == ReliableChannelState.NotConnected)
                 {
                     break;
                 }
@@ -152,6 +163,12 @@ namespace CS3103Assignment4
                 case ControlMessageType.ConnectionReset:
                     this.ProcessConnectionResetPacket();
                     break;
+                case ControlMessageType.DisconnectionRequest:
+                    this.ProcessDisconnectionRequest();
+                    break;
+                case ControlMessageType.DisconnectionResponse_LastData:
+                    this.ProcessDisconnectionResponse();
+                    break;
                 default:
                     this.Log("unknown control message " + controlMessage);
                     break;
@@ -182,33 +199,78 @@ namespace CS3103Assignment4
             this.Log("connection established (third handshake)");
         }
 
+        public void Disconnect()
+        {
+            if (_reliableChannelState == ReliableChannelState.NotConnected)
+                return;
+
+            WriteControlMessagePacketAndSendImmediately(ControlMessageType.DisconnectionRequest, _sequenceNumber, out _);
+            _reliableChannelState = ReliableChannelState.Disconnecting;
+        }
+
+        private void ProcessDisconnectionRequest()
+        {
+            WriteControlMessagePacketAndSendImmediately(ControlMessageType.DisconnectionResponse_LastData, _sequenceNumber, out _);
+            _reliableChannelState = ReliableChannelState.NotConnected;
+            this.Log("Disconnect by remote request");
+        }
+
+        private void ProcessDisconnectionResponse()
+        {
+            _reliableChannelState = ReliableChannelState.NotConnected;
+            this.Log("Disconnected (response received)");
+        }
+
         private void ProcessUserDataPacket(uint sequenceNumber, byte[] userData)
         {
             this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.Acknowledgement, sequenceNumber, out _);
-            if (!this._receivedPackets.ContainsKey(sequenceNumber) && sequenceNumber > this._selfReceivedInOrderPacketLastSequenceID)
-            {
-                this._receivedPackets.Add(sequenceNumber, new ReceivedDataPacket(userData, userData.Length, sequenceNumber));
-                this.Log("received packet " + sequenceNumber + ", acknowledgement sent");
-                uint i = this._selfReceivedInOrderPacketLastSequenceID + 1;
-                for(; i < sequenceNumber; i++)
-                {
-                    if (this._receivedPackets.ContainsKey(i))
-                    {
-                        ReceivedDataPacket packet = this._receivedPackets[i];
-                        this._receivedPackets.Remove(i);
-                        this._readyData.Add(packet.data);
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-                this._selfReceivedInOrderPacketLastSequenceID = i - 1;
 
+            if (!_receivedPackets.ContainsKey(sequenceNumber))
+            {
+                _receivedPackets.Add(sequenceNumber, new ReceivedDataPacket(userData, userData.Length, sequenceNumber));
+                this.Log("received packet " + sequenceNumber + ", acknowledgment sent");
             }
             else
             {
-                this.Log("received duplicated packet " + sequenceNumber + ", acknowledgement sent");
+                this.Log("received duplicate packet " + sequenceNumber + ", acknowledgement sent");
+            }
+
+            uint expectedSeq = _selfReceivedInOrderPacketLastSequenceID + 1;
+            for (uint i = expectedSeq; i < sequenceNumber; i++)
+            {
+                if (!_receivedPackets.ContainsKey(i) & !_missingPacketTimers.ContainsKey(i))
+                {
+                    _missingPacketTimers[i] = 0f;
+                }
+            }
+
+            TryProcessInOrderPackets();
+        }
+
+        private void TryProcessInOrderPackets()
+        {
+            uint nextSeq = _selfReceivedInOrderPacketLastSequenceID + 1;
+            while (true)
+            {
+                if (_receivedPackets.ContainsKey(nextSeq))
+                {
+                    var packet = _receivedPackets[nextSeq];
+                    _receivedPackets.Remove(nextSeq);
+                    _readyData.Add(packet.data);
+                    _selfReceivedInOrderPacketLastSequenceID = nextSeq;
+                    nextSeq++;
+                }
+                else if (_missingPacketTimers.ContainsKey(nextSeq) && _missingPacketTimers[nextSeq] >= MissingPacketTimeout)
+                {
+                    this.Log("skipping missing packet " + nextSeq + " after timeout");
+                    _missingPacketTimers.Remove(nextSeq);
+                    _selfReceivedInOrderPacketLastSequenceID = nextSeq;
+                    nextSeq++;
+                }
+                else
+                {
+                    break;
+                }
             }
         }
 
@@ -220,13 +282,13 @@ namespace CS3103Assignment4
                 this._sentPackets.Remove(sequenceID);
             }
             uint expectedInOrderSequenceID = this._remoteReceivedInOrderPacketLastSequenceID + 1;
-            if(expectedInOrderSequenceID == sequenceID)
+            if (expectedInOrderSequenceID == sequenceID)
             {
                 uint i = expectedInOrderSequenceID;
                 while (!this._sentPackets.ContainsKey(i + 1)) // packet already acknowledged, so the dictionary no longer contains it
                 {
                     i++;
-                    if(i >= this._sequenceNumber)
+                    if (i >= this._sequenceNumber)
                     {
                         break;
                     }
@@ -234,13 +296,25 @@ namespace CS3103Assignment4
                 this._remoteReceivedInOrderPacketLastSequenceID = i;
                 return;
             }
-            if(sequenceID > expectedInOrderSequenceID)
+            if (sequenceID > expectedInOrderSequenceID)
             {
-                SentDataPacket resentPacket = this._sentPackets[expectedInOrderSequenceID];
-                this._sendBufferNextWriteIndex = resentPacket.packet.Length;
-                Array.Copy(resentPacket.packet, 0, this._sendBuffer, 0, this._sendBufferNextWriteIndex);
-                this.SendImmediately();
-                this.Log("packet " + expectedInOrderSequenceID + " is missing acknowledgement, resending it");
+                if (_sentPackets.TryGetValue(expectedInOrderSequenceID, out var resentPacket))
+                {
+                    if (resentPacket.retransmissionCount < 2)
+                    {
+                        resentPacket.retransmissionCount++;
+                        this._sendBufferNextWriteIndex = resentPacket.packet.Length;
+                        Array.Copy(resentPacket.packet, 0, this._sendBuffer, 0, this._sendBufferNextWriteIndex);
+                        SendImmediately();
+                        this.Log("packet " + expectedInOrderSequenceID + " is missing acknowledgement resending it (attempt " + resentPacket.retransmissionCount + ")");
+                    }
+                    else
+                    {
+                        _sentPackets.Remove(expectedInOrderSequenceID);
+                        this.Log("packet " + expectedInOrderSequenceID + " failed to be acknowledged after 2 retransmissions, giving up");
+                        _remoteReceivedInOrderPacketLastSequenceID = expectedInOrderSequenceID;
+                    }
+                }
             }
         }
 
@@ -304,9 +378,11 @@ namespace CS3103Assignment4
         private class SentDataPacket
         {
             public readonly byte[] packet;
+            public int retransmissionCount;
             public SentDataPacket(byte[] packet)
             {
                 this.packet = packet;
+                this.retransmissionCount = 0;
             }
         }
 
@@ -334,3 +410,5 @@ namespace CS3103Assignment4
         Disconnecting,
     }
 }
+
+
