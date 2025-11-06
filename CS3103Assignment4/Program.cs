@@ -17,8 +17,10 @@ namespace CS3103Assignment4
             server.ListenForConnection(50000);
             GameNet client = new GameNet("Client");
             client.Connect("127.0.0.1", 50000);
-            byte[] clientData = new byte[] { 1, 2, 3, 4, 5 };
-            byte[] serverData = new byte[] { 6, 7, 8, 9, 10 };
+            byte[] clientUnreliableData = new byte[] { 1, 2, 3, 4, 5 };
+            byte[] serverUnreliableData = new byte[] { 6, 7, 8, 9, 10 };
+            byte[] clientReliableData = new byte[] { 11, 12, 13, 14, 15 };
+            byte[] serverReliableData = new byte[] { 16, 17, 18, 19, 20 };
             Stopwatch stopwatch = new Stopwatch();
             // run with game loop, no need multi threading
             while (true)
@@ -31,18 +33,30 @@ namespace CS3103Assignment4
                 DateTime now = DateTime.Now;
                 if(client.IsConnected && server.IsConnected)
                 {
-                    client.Send(ChannelType.Reliable, now.ToBinary(), clientData);
-                    server.Send(ChannelType.Reliable, now.ToBinary(), serverData);
+                    client.Send(ChannelType.Unreliable, now.ToBinary(), clientUnreliableData);
+                    server.Send(ChannelType.Unreliable, now.ToBinary(), serverUnreliableData);
+                    client.Send(ChannelType.Reliable, now.ToBinary(), clientReliableData);
+                    server.Send(ChannelType.Reliable, now.ToBinary(), serverReliableData);
                 }
-                byte[][] serverReceived = server.GetReliablePackets();
-                byte[][] clientReceived = client.GetReliablePackets();
-                if (serverReceived.Length > 0)
+                byte[][] serverReceivedUnreliableData = server.GetUnreliablePackets();
+                byte[][] clientReceivedUnreliableData = client.GetUnreliablePackets();
+                byte[][] serverReceivedReliableData = server.GetReliablePackets();
+                byte[][] clientReceivedReliableData = client.GetReliablePackets();
+                if (serverReceivedUnreliableData.Length > 0)
                 {
-                    Console.WriteLine("Server received ready data: " + string.Join("\n", serverReceived.Select(x => "{" + string.Join(", ", x) + "}")));
+                    Console.WriteLine("[User] Server received unreliable data: " + string.Join("\n", serverReceivedUnreliableData.Select(x => "{" + string.Join(", ", x) + "}")));
                 }
-                if (clientReceived.Length > 0)
+                if (clientReceivedUnreliableData.Length > 0)
                 {
-                    Console.WriteLine("Client received ready data: " + string.Join("\n", clientReceived.Select(x => "{" + string.Join(", ", x) + "}")));
+                    Console.WriteLine("[User] Client received unreliable data: " + string.Join("\n", clientReceivedUnreliableData.Select(x => "{" + string.Join(", ", x) + "}")));
+                }
+                if (serverReceivedReliableData.Length > 0)
+                {
+                    Console.WriteLine("[User] Server received reliable data: " + string.Join("\n", serverReceivedReliableData.Select(x => "{" + string.Join(", ", x) + "}")));
+                }
+                if (clientReceivedReliableData.Length > 0)
+                {
+                    Console.WriteLine("[User] Client received reliable data: " + string.Join("\n", clientReceivedReliableData.Select(x => "{" + string.Join(", ", x) + "}")));
                 }
             }
             /*Thread thread = new Thread(() =>
