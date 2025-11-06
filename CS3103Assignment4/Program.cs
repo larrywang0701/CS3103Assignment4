@@ -13,12 +13,10 @@ namespace CS3103Assignment4
         static void Main(string[] args)
         {
             TestChannel testChannel = new TestChannel(0.02f, 0.01f, 50001, 50002, 50000);
-            ReliableChannel server = new ReliableChannel();
-            server.Name = "Server";
+            GameNet server = new GameNet("Server");
             server.ListenForConnection(50000);
-            ReliableChannel client = new ReliableChannel();
-            client.Name = "Client";
-            client.Connect("127.0.0.1", 50002);
+            GameNet client = new GameNet("Client");
+            client.Connect("127.0.0.1", 50000);
             byte[] clientData = new byte[] { 1, 2, 3, 4, 5 };
             byte[] serverData = new byte[] { 6, 7, 8, 9, 10 };
             Stopwatch stopwatch = new Stopwatch();
@@ -27,14 +25,24 @@ namespace CS3103Assignment4
             {
                 float deltaSeconds = stopwatch.ElapsedMilliseconds / 1000;
                 stopwatch.Restart();
-                testChannel.Tick();
+                //testChannel.Tick();
                 server.Tick(deltaSeconds);
                 client.Tick(deltaSeconds);
-
+                DateTime now = DateTime.Now;
                 if(client.IsConnected && server.IsConnected)
                 {
-                    client.SendData(clientData);
-                    server.SendData(serverData);
+                    client.Send(ChannelType.Reliable, now.ToBinary(), clientData);
+                    server.Send(ChannelType.Reliable, now.ToBinary(), serverData);
+                }
+                byte[][] serverReceived = server.GetReliablePackets();
+                byte[][] clientReceived = client.GetReliablePackets();
+                if (serverReceived.Length > 0)
+                {
+                    Console.WriteLine("Server received ready data: " + string.Join("\n", serverReceived.Select(x => "{" + string.Join(", ", x) + "}")));
+                }
+                if (clientReceived.Length > 0)
+                {
+                    Console.WriteLine("Client received ready data: " + string.Join("\n", clientReceived.Select(x => "{" + string.Join(", ", x) + "}")));
                 }
             }
             /*Thread thread = new Thread(() =>

@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace CS3103Assignment4
 {
-    class ReliableChannel : UnreliableChannel
+    class ReliableChannel : Channel
     {
         private ReliableChannelState _reliableChannelState;
         public bool IsConnected { get { return this._reliableChannelState == ReliableChannelState.Connected || this._reliableChannelState == ReliableChannelState.Disconnecting; } }
@@ -16,11 +16,15 @@ namespace CS3103Assignment4
         private int _sendBufferNextWriteIndex = 0;
         private int SendBufferDataLength { get { return this._sendBufferNextWriteIndex; } }
 
+        // the reliable channel's internal sequence number
         private uint _sequenceNumber;
 
         private byte[] _receiveBuffer;
         private int _receiveBufferNextReadIndex;
 
+        private List<byte[]> _readyData = new List<byte[]>();
+
+        private uint _selfReceivedInOrderPacketLastSequenceID;
         private uint _remoteReceivedInOrderPacketLastSequenceID;
 
         private float _timerBeforeResetConnectionDuringConnecting;
@@ -29,20 +33,18 @@ namespace CS3103Assignment4
         private Dictionary<uint, SentDataPacket> _sentPackets = new Dictionary<uint, SentDataPacket>();
         private Dictionary<uint, ReceivedDataPacket> _receivedPackets = new Dictionary<uint, ReceivedDataPacket>();
 
-        public override void ListenForConnection(ushort port)
+        public void ListenForConnection()
         {
             this._sendBuffer = new byte[_sendBufferLength];
             this._reliableChannelState = ReliableChannelState.ListeningForConnection;
-            base.ListenForConnection(port);
         }
 
-        public override void Connect(string remoteHost, ushort remotePort)
+        public void Connect()
         {
-            base.Connect(remoteHost, remotePort);
             this._reliableChannelState = ReliableChannelState.Connecting;
             this._sendBuffer = new byte[_sendBufferLength];
             this.ResetSendBufferWriteIndex();
-            this.WritePacketAndSendImmediately(ControlMessageType.ConnectionRequest, this._sequenceNumber, null, 0, out _);
+            this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.ConnectionRequest, this._sequenceNumber, out _);
             this._timerBeforeResetConnectionDuringConnecting = _connectionWaitDuration;
         }
 
@@ -63,6 +65,7 @@ namespace CS3103Assignment4
             if (!(data is null))
             {
                 Array.Copy(data, 0, this._sendBuffer, this._sendBufferNextWriteIndex, dataLength);
+                this._sendBufferNextWriteIndex += dataLength;
             }
             int packetLength = this._sendBufferNextWriteIndex - initialSendBufferNextWriteIndex;
             Array.Copy(BitConverter.GetBytes(packetLength), 0, this._sendBuffer, packetLengthWriteIndex, sizeof(int));
@@ -72,34 +75,38 @@ namespace CS3103Assignment4
 
         private void SendImmediately()
         {
-            base.Send(this._sendBuffer, this.SendBufferDataLength);
+            this.Sender(this._sendBuffer.Take(this.SendBufferDataLength).ToArray(), this.SendBufferDataLength);
             this.ResetSendBufferWriteIndex();
         }
 
-        private void WritePacketAndSendImmediately(ControlMessageType controlMessageType, uint sequenceNumber, byte[] data, int dataLength, out byte[] packet)
+        private void WriteControlMessagePacketAndSendImmediately(ControlMessageType controlMessageType, uint sequenceNumber, out byte[] packet)
         {
-            this.WritePacket(controlMessageType, sequenceNumber, data, dataLength, out packet);
+            this.WritePacket(controlMessageType, sequenceNumber, null, 0, out packet);
             this.SendImmediately();
         }
 
         public void Tick(float deltaSeconds)
         {
-            if(this._reliableChannelState == ReliableChannelState.Connecting)
+            if (this._reliableChannelState == ReliableChannelState.Connecting)
             {
                 this._timerBeforeResetConnectionDuringConnecting -= deltaSeconds;
-                if(this._timerBeforeResetConnectionDuringConnecting <= 0)
+                if (this._timerBeforeResetConnectionDuringConnecting <= 0)
                 {
                     this._reliableChannelState = ReliableChannelState.NotConnected;
                     this.Log("establishing connection has timed out");
                 }
             }
-            this._receiveBuffer = base.Receive();
+        }
+
+        public override void OnReceivedData(byte[] data)
+        {
+            this._receiveBuffer = data;
             if(this._receiveBuffer is null)
             {
                 return;
             }
-            this._receiveBufferNextReadIndex = 0;
             int receivedLength = this._receiveBuffer.Length;
+            this._receiveBufferNextReadIndex = 0;
             while(this._receiveBufferNextReadIndex < receivedLength)
             {
                 this.ProcessReceivedPacket();
@@ -114,7 +121,7 @@ namespace CS3103Assignment4
         {
             if (this._reliableChannelState == ReliableChannelState.NotConnected)
             {
-                this.WritePacketAndSendImmediately(ControlMessageType.ConnectionReset, 0, null, 0, out _);
+                this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.ConnectionReset, 0, out _);
                 this.Log("connection is not established, force sender to reset connection");
                 return;
             }
@@ -136,6 +143,7 @@ namespace CS3103Assignment4
                     int userDataLength = packetLength - this._receiveBufferNextReadIndex;
                     byte[] userData = new byte[userDataLength];
                     Array.Copy(this._receiveBuffer, this._receiveBufferNextReadIndex, userData, 0, userDataLength);
+                    this._receiveBufferNextReadIndex += userDataLength;
                     this.ProcessUserDataPacket(sequenceNumber, userData);
                     break;
                 case ControlMessageType.Acknowledgement:
@@ -154,7 +162,7 @@ namespace CS3103Assignment4
         {
             this._sequenceNumber = 0;
             this._remoteReceivedInOrderPacketLastSequenceID = 0;
-            this.WritePacketAndSendImmediately(ControlMessageType.ConnectionResponse, this._sequenceNumber, null, 0, out _);
+            this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.ConnectionResponse, this._sequenceNumber, out _);
             this.Log("received connection request");
             this._timerBeforeResetConnectionDuringConnecting = _connectionWaitDuration;
         }
@@ -163,7 +171,7 @@ namespace CS3103Assignment4
         {
             this._sequenceNumber = 0;
             this._remoteReceivedInOrderPacketLastSequenceID = 0;
-            this.WritePacketAndSendImmediately(ControlMessageType.ConnectionRequestThirdHandshake, this._sequenceNumber, null, 0, out _);
+            this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.ConnectionRequestThirdHandshake, this._sequenceNumber, out _);
             this._reliableChannelState = ReliableChannelState.Connected;
             this.Log("connection established (received response)");
         }
@@ -176,12 +184,27 @@ namespace CS3103Assignment4
 
         private void ProcessUserDataPacket(uint sequenceNumber, byte[] userData)
         {
-            this.WritePacketAndSendImmediately(ControlMessageType.Acknowledgement, sequenceNumber, null, 0, out _);
-            if (!this._receivedPackets.ContainsKey(sequenceNumber))
+            this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.Acknowledgement, sequenceNumber, out _);
+            if (!this._receivedPackets.ContainsKey(sequenceNumber) && sequenceNumber > this._selfReceivedInOrderPacketLastSequenceID)
             {
-
                 this._receivedPackets.Add(sequenceNumber, new ReceivedDataPacket(userData, userData.Length, sequenceNumber));
                 this.Log("received packet " + sequenceNumber + ", acknowledgement sent");
+                uint i = this._selfReceivedInOrderPacketLastSequenceID + 1;
+                for(; i < sequenceNumber; i++)
+                {
+                    if (this._receivedPackets.ContainsKey(i))
+                    {
+                        ReceivedDataPacket packet = this._receivedPackets[i];
+                        this._receivedPackets.Remove(i);
+                        this._readyData.Add(packet.data);
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                this._selfReceivedInOrderPacketLastSequenceID = i - 1;
+
             }
             else
             {
@@ -203,7 +226,7 @@ namespace CS3103Assignment4
                 while (!this._sentPackets.ContainsKey(i + 1)) // packet already acknowledged, so the dictionary no longer contains it
                 {
                     i++;
-                    if(i == this._sequenceNumber)
+                    if(i >= this._sequenceNumber)
                     {
                         break;
                     }
@@ -248,12 +271,21 @@ namespace CS3103Assignment4
             return result;
         }
 
-        public void SendData(byte[] data)
+        public byte[] GetEncapsulatedDataToSend(byte[] data)
         {
             this._sequenceNumber++;
             byte[] packet;
-            this.WritePacketAndSendImmediately(ControlMessageType.UserData, this._sequenceNumber, data, data.Length, out packet);
+            this.WritePacket(ControlMessageType.UserData, this._sequenceNumber, data, data.Length, out packet);
             this._sentPackets.Add(this._sequenceNumber, new SentDataPacket(packet));
+            this.ResetSendBufferWriteIndex();
+            return packet;
+        }
+
+        public override byte[][] GetPackets()
+        {
+            byte[][] packets = this._readyData.ToArray();
+            this._readyData.Clear();
+            return packets;
         }
 
         private enum ControlMessageType : byte
