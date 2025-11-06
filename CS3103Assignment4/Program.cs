@@ -16,7 +16,7 @@ namespace CS3103Assignment4
             GameNet server = new GameNet("Server");
             server.ListenForConnection(50000);
             GameNet client = new GameNet("Client");
-            client.Connect("127.0.0.1", 50000);
+            client.Connect("127.0.0.1", 50002);
             byte[] clientUnreliableData = new byte[] { 1, 2, 3, 4, 5 };
             byte[] serverUnreliableData = new byte[] { 6, 7, 8, 9, 10 };
             byte[] clientReliableData = new byte[] { 11, 12, 13, 14, 15 };
@@ -27,7 +27,7 @@ namespace CS3103Assignment4
             {
                 float deltaSeconds = stopwatch.ElapsedMilliseconds / 1000;
                 stopwatch.Restart();
-                //testChannel.Tick();
+                testChannel.Tick();
                 server.Tick(deltaSeconds);
                 client.Tick(deltaSeconds);
                 DateTime now = DateTime.Now;
