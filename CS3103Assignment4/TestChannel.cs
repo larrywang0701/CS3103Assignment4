@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CS3103Assignment4
 {
@@ -12,9 +10,11 @@ namespace CS3103Assignment4
     {
         private class BufferedPacket
         {
-            public byte[] data;
-            public float latencyTimer;
+            public byte[] Data;
+            public IPEndPoint Destination;
+            public float LatencyTimer;
         }
+
         private IPEndPoint _serverSocketEndPoint;
         private IPEndPoint _clientSocketEndPoint;
         private IPEndPoint _packetFromServerForwardToEndPoint;
@@ -24,16 +24,18 @@ namespace CS3103Assignment4
         private Random _random = new Random(0);
         private float _packetLossRate;
         private float _maximumLatency;
-        private List<byte[]> _buffer_ToServer = new List<byte[]>();
-        private List<byte[]> _buffer_ToClient = new List<byte[]>();
 
-        public TestChannel(float packetLossRate, float maximumLatency, ushort serverSocketPort, ushort clientSocketPort, ushort packetFromClientForwardToPort)
+        // Buffers for in-flight packets (simulate latency)
+        private List<BufferedPacket> _buffer_ToServer = new List<BufferedPacket>();
+        private List<BufferedPacket> _buffer_ToClient = new List<BufferedPacket>();
+
+        public TestChannel(float packetLossRate, float maximumLatency, ushort serverSocketPort, ushort clientSocketPort, ushort packetFromClientForwardToPort, ushort packetFromServerForwardToPort)
         {
             this._serverSocketEndPoint = new IPEndPoint(IPAddress.Any, serverSocketPort);
             this._clientSocketEndPoint = new IPEndPoint(IPAddress.Any, clientSocketPort);
             this._packetFromClientForwardToEndPoint = new IPEndPoint(IPAddress.Loopback, packetFromClientForwardToPort);
-            //this._firstSocketForwardToEndPoint = new IPEndPoint(IPAddress.Loopback, firstSocketForwardToPort);
-            //this._secondSocketForwardToEndPoint = new IPEndPoint(IPAddress.Loopback, secondSocketForwardToPort);
+            this._packetFromServerForwardToEndPoint = new IPEndPoint(IPAddress.Loopback, packetFromServerForwardToPort);
+
             this._serverSocket = new UdpClient();
             this._clientSocket = new UdpClient();
             this._serverSocket.Client.Bind(this._serverSocketEndPoint);
@@ -42,29 +44,66 @@ namespace CS3103Assignment4
             this._maximumLatency = maximumLatency;
         }
 
-        public void Tick()
+        public void Tick(float deltaTime)
         {
-            if (this._serverSocket.Available > 0)
+            while (this._serverSocket.Available > 0)
             {
                 byte[] data = this._serverSocket.Receive(ref this._packetFromClientForwardToEndPoint);
-                if (!this.ShouldDropPacket())
+                if (!ShouldDropPacket())
                 {
-                    this._clientSocket.Send(data, data.Length, this._packetFromServerForwardToEndPoint);
+                    AddPacketToBuffer(_buffer_ToClient, data, _packetFromServerForwardToEndPoint);
                 }
             }
-            if(this._clientSocket.Available > 0)
+
+            while (this._clientSocket.Available > 0)
             {
                 byte[] data = this._clientSocket.Receive(ref this._packetFromServerForwardToEndPoint);
-                if (!this.ShouldDropPacket())
+                if (!ShouldDropPacket())
                 {
-                    this._serverSocket.Send(data, data.Length, this._packetFromClientForwardToEndPoint);
+                    AddPacketToBuffer(_buffer_ToServer, data, _packetFromClientForwardToEndPoint);
                 }
+            }
+
+            ProcessBuffer(_buffer_ToClient, _clientSocket, deltaTime);
+            ProcessBuffer(_buffer_ToServer, _serverSocket, deltaTime);
+        }
+
+        private void AddPacketToBuffer(List<BufferedPacket> buffer, byte[] data, IPEndPoint destination)
+        {
+            float latency = (float)(_random.NextDouble() * _maximumLatency); 
+            buffer.Add(new BufferedPacket
+            {
+                Data = data,
+                Destination = destination,
+                LatencyTimer = latency
+            });
+        }
+
+        private void ProcessBuffer(List<BufferedPacket> buffer, UdpClient socket, float deltaTime)
+        {
+            foreach (var packet in buffer)
+                packet.LatencyTimer -= deltaTime;
+
+            var ready = buffer.Where(p => p.LatencyTimer <= 0).ToList();
+
+            if (ready.Count > 1 && _random.NextDouble() < 0.3)
+            {
+                ready = ready.OrderBy(_ => _random.Next()).ToList(); 
+            }
+
+            foreach (var packet in ready)
+            {
+                socket.Send(packet.Data, packet.Data.Length, packet.Destination);
+                buffer.Remove(packet);
             }
         }
 
         private bool ShouldDropPacket()
         {
-            return (1 - this._random.NextDouble()) >= (1 - this._packetLossRate);
+            return _random.NextDouble() < _packetLossRate;
         }
     }
 }
+
+
+
