@@ -21,6 +21,7 @@ namespace CS3103Assignment4
         private bool _isListener;
 
         public bool IsConnected => this._reliableChannel.IsConnected;
+        public bool IsDisconnecting => this._reliableChannel.IsDisconnecting;
 
         public GameNet(string name)
         {
@@ -69,12 +70,7 @@ namespace CS3103Assignment4
 
         public void Disconnect()
         {
-            throw new NotImplementedException();
-        }
-
-        public void ReliableGetData(byte[] buffer)
-        {
-            throw new NotImplementedException();
+            this._reliableChannel.StartDisconnecting();
         }
 
         private byte[] EncapsulateData(ChannelType channelType, long timeStamp, byte[] data)
@@ -106,7 +102,7 @@ namespace CS3103Assignment4
 
         public void Tick(float deltaSeconds)
         {
-            if(this._socket.Available > 0)
+            while(this._socket.Available > 0)
             {
                 byte[] packet = this._socket.Receive(ref this._remoteHost);
                 ChannelType channelType = (ChannelType)packet[0];

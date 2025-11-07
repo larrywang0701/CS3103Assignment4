@@ -22,22 +22,40 @@ namespace CS3103Assignment4
             byte[] clientReliableData = new byte[] { 11, 12, 13, 14, 15 };
             byte[] serverReliableData = new byte[] { 16, 17, 18, 19, 20 };
             Stopwatch stopwatch = new Stopwatch();
+            int gameLoopIterationCount = 0;
+            int gameLoopIterationCountToStartDisconnecting = 999;
             // run with game loop, no need multi threading
-            while (true)
+            while(gameLoopIterationCount < 999 || (client.IsConnected || server.IsConnected))
             {
+                gameLoopIterationCount++;
                 float deltaSeconds = stopwatch.ElapsedMilliseconds / 1000;
+                if(deltaSeconds == 0)
+                {
+                    // when waiting for data during disconnecting, the value of deltaSeconds is too small that it may become zero due to floating-point precision problem.
+                    // set deltaSeconds = 0.01f here to make sure the program will not stuck when deltaTime is too small for floating-point numbers to represent.
+                    deltaSeconds = 0.01f;
+                }
                 stopwatch.Restart();
                 testChannel.Tick();
                 server.Tick(deltaSeconds);
                 client.Tick(deltaSeconds);
                 DateTime now = DateTime.Now;
-                if(client.IsConnected && server.IsConnected)
+                if (gameLoopIterationCount > gameLoopIterationCountToStartDisconnecting && client.IsConnected && !client.IsDisconnecting)
                 {
-                    client.Send(ChannelType.Unreliable, now.ToBinary(), clientUnreliableData);
-                    server.Send(ChannelType.Unreliable, now.ToBinary(), serverUnreliableData);
-                    client.Send(ChannelType.Reliable, now.ToBinary(), clientReliableData);
-                    server.Send(ChannelType.Reliable, now.ToBinary(), serverReliableData);
+                    Console.WriteLine("\n\n\n=== Disconnection Starts ===\n");
+                    client.Disconnect();
                 }
+                else
+                {
+                    if (client.IsConnected && server.IsConnected && !client.IsDisconnecting && !server.IsDisconnecting)
+                    {
+                        client.Send(ChannelType.Unreliable, now.ToBinary(), clientUnreliableData);
+                        server.Send(ChannelType.Unreliable, now.ToBinary(), serverUnreliableData);
+                        client.Send(ChannelType.Reliable, now.ToBinary(), clientReliableData);
+                        server.Send(ChannelType.Reliable, now.ToBinary(), serverReliableData);
+                    }
+                }
+                
                 byte[][] serverReceivedUnreliableData = server.GetUnreliablePackets();
                 byte[][] clientReceivedUnreliableData = client.GetUnreliablePackets();
                 byte[][] serverReceivedReliableData = server.GetReliablePackets();
@@ -59,33 +77,8 @@ namespace CS3103Assignment4
                     Console.WriteLine("[User] Client received reliable data: " + string.Join("\n", clientReceivedReliableData.Select(x => "{" + string.Join(", ", x) + "}")));
                 }
             }
-            /*Thread thread = new Thread(() =>
-            {
-                Stopwatch stopwatch = new Stopwatch();
-                while (true)
-                {
-                    float deltaSeconds = stopwatch.ElapsedMilliseconds / 1000;
-                    stopwatch.Restart();
-                    testChannel.Tick();
-                    server.Tick(deltaSeconds);
-                    client.Tick(deltaSeconds);
-                    
-                }
-            });
-            thread.IsBackground = true;
-            thread.Start();
-            while (true)
-            {
-                lock (client)
-                {
-                    if (client.IsConnected)
-                    {
-                        client.SendData(clientData);
-                       // server.SendData(serverData);
-                    }
-                }
-                Thread.Sleep(5);
-            }*/
+            Console.WriteLine("\nAll GameNet channels have disconnected. Program finished executing, press enter to exit.");
+            Console.ReadLine();
         }
     }
 }

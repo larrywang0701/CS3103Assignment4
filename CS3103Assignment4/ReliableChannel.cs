@@ -10,6 +10,7 @@ namespace CS3103Assignment4
     {
         private ReliableChannelState _reliableChannelState;
         public bool IsConnected { get { return this._reliableChannelState == ReliableChannelState.Connected || this._reliableChannelState == ReliableChannelState.Disconnecting; } }
+        public bool IsDisconnecting { get { return this._reliableChannelState == ReliableChannelState.Disconnecting; } }
         private const int _sendBufferLength = 1024;
 
         private byte[] _sendBuffer;
@@ -35,6 +36,8 @@ namespace CS3103Assignment4
 
         private Dictionary<uint, float> _missingPacketTimers = new Dictionary<uint, float>();
         private const float MissingPacketTimeout = 0.2f;
+
+        private bool _toldRemoteThatSelfHaveNoDataDuringDisconnecting;
 
         public void ListenForConnection()
         {
@@ -104,6 +107,10 @@ namespace CS3103Assignment4
             foreach (var seq in keys)
             {
                 _missingPacketTimers[seq] += deltaSeconds;
+                if(seq < this._selfReceivedInOrderPacketLastSequenceID)
+                {
+                    this._missingPacketTimers.Remove(seq);
+                }
             }
 
             TryProcessInOrderPackets();
@@ -163,11 +170,11 @@ namespace CS3103Assignment4
                 case ControlMessageType.ConnectionReset:
                     this.ProcessConnectionResetPacket();
                     break;
-                case ControlMessageType.DisconnectionRequest:
-                    this.ProcessDisconnectionRequest();
+                case ControlMessageType.Disconnection_Wait:
+                    this.ProcessDisconnection(true);
                     break;
-                case ControlMessageType.DisconnectionResponse_LastData:
-                    this.ProcessDisconnectionResponse();
+                case ControlMessageType.Disconnection_AllDataReceived:
+                    this.ProcessDisconnection(false);
                     break;
                 default:
                     this.Log("unknown control message " + controlMessage);
@@ -199,33 +206,46 @@ namespace CS3103Assignment4
             this.Log("connection established (third handshake)");
         }
 
-        public void Disconnect()
+        public void StartDisconnecting()
         {
-            if (_reliableChannelState == ReliableChannelState.NotConnected)
+            if (this._reliableChannelState == ReliableChannelState.NotConnected)
+            {
                 return;
-
-            WriteControlMessagePacketAndSendImmediately(ControlMessageType.DisconnectionRequest, _sequenceNumber, out _);
-            _reliableChannelState = ReliableChannelState.Disconnecting;
+            }
+            bool selfHasUnreceivedData = this.HasUnreceivedData();
+            ControlMessageType controlMessageType = selfHasUnreceivedData ? ControlMessageType.Disconnection_Wait : ControlMessageType.Disconnection_AllDataReceived;
+            this._toldRemoteThatSelfHaveNoDataDuringDisconnecting = !selfHasUnreceivedData;
+            this.WriteControlMessagePacketAndSendImmediately(controlMessageType, this._sequenceNumber, out _);
+            this._reliableChannelState = ReliableChannelState.Disconnecting;
+            this.Log("start disconnecting, self have unreceived data = " + selfHasUnreceivedData);
         }
 
-        private void ProcessDisconnectionRequest()
+        private void ProcessDisconnection(bool wait)
         {
-            WriteControlMessagePacketAndSendImmediately(ControlMessageType.DisconnectionResponse_LastData, _sequenceNumber, out _);
-            _reliableChannelState = ReliableChannelState.NotConnected;
-            this.Log("Disconnect by remote request");
-        }
-
-        private void ProcessDisconnectionResponse()
-        {
-            _reliableChannelState = ReliableChannelState.NotConnected;
-            this.Log("Disconnected (response received)");
+            bool selfHasUnreceivedData = this.HasUnreceivedData();
+            if (this._reliableChannelState == ReliableChannelState.Connected)
+            {
+                ControlMessageType controlMessageType = selfHasUnreceivedData ? ControlMessageType.Disconnection_Wait : ControlMessageType.Disconnection_AllDataReceived;
+                this.WriteControlMessagePacketAndSendImmediately(controlMessageType, this._sequenceNumber, out _);
+            }
+            this._reliableChannelState = ReliableChannelState.Disconnecting;
+            if (wait || selfHasUnreceivedData)
+            {
+                this.Log("received Disconnection_Wait, will actually disconnect after all remaining data are ready on both sides. sequence number = " + this._sequenceNumber);
+            }
+            else
+            {
+                this._reliableChannelState = ReliableChannelState.NotConnected;
+                this.Log("[Disconnection Completed] received Disconnection_AllDataReceived, and self also have no unreceived data. sequence number = " + this._sequenceNumber);
+                this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.Disconnection_AllDataReceived, this._sequenceNumber, out _);
+            }
         }
 
         private void ProcessUserDataPacket(uint sequenceNumber, byte[] userData)
         {
             this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.Acknowledgement, sequenceNumber, out _);
 
-            if (!_receivedPackets.ContainsKey(sequenceNumber))
+            if (!_receivedPackets.ContainsKey(sequenceNumber) && sequenceNumber >= this._selfReceivedInOrderPacketLastSequenceID)
             {
                 _receivedPackets.Add(sequenceNumber, new ReceivedDataPacket(userData, userData.Length, sequenceNumber));
                 this.Log("received packet " + sequenceNumber + ", acknowledgment sent");
@@ -272,6 +292,17 @@ namespace CS3103Assignment4
                     break;
                 }
             }
+            if(this._reliableChannelState == ReliableChannelState.Disconnecting && !this.HasUnreceivedData() && !this._toldRemoteThatSelfHaveNoDataDuringDisconnecting)
+            {
+                this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.Disconnection_AllDataReceived, this._sequenceNumber, out _);
+                this._toldRemoteThatSelfHaveNoDataDuringDisconnecting = true;
+                this.Log("all data on self side already received, will tell remote about this. sequence number = " + this._sequenceNumber);
+            }
+        }
+
+        private bool HasUnreceivedData()
+        {
+            return this._receivedPackets.Count > 0 || this._missingPacketTimers.Count > 0;
         }
 
         private void ProcessAcknowledgementPacket(uint sequenceID)
@@ -347,6 +378,10 @@ namespace CS3103Assignment4
 
         public byte[] GetEncapsulatedDataToSend(byte[] data)
         {
+            if(this._reliableChannelState != ReliableChannelState.Connected)
+            {
+                throw new InvalidOperationException("You cannot send data in the connection state " + this._reliableChannelState);
+            }
             this._sequenceNumber++;
             byte[] packet;
             this.WritePacket(ControlMessageType.UserData, this._sequenceNumber, data, data.Length, out packet);
@@ -370,9 +405,8 @@ namespace CS3103Assignment4
             ConnectionRequestThirdHandshake = 3,
             Acknowledgement = 4,
             ConnectionReset = 5,
-            DisconnectionRequest = 6,
-            DisconnectionResponse_Wait = 7,
-            DisconnectionResponse_LastData = 8,
+            Disconnection_Wait = 6,
+            Disconnection_AllDataReceived = 7,
         }
 
         private class SentDataPacket

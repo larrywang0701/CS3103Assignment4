@@ -1,8 +1,4 @@
-﻿/*
- * Author: Wang Zihan (A0266073A)
- */
-
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -16,6 +12,11 @@ namespace CS3103Assignment4
         /// Is GameNet connected?
         /// </summary>
         bool IsConnected { get; }
+
+        /// <summary>
+        /// Is GameNet disconnecting (wait for receiving remaining data)?
+        /// </summary>
+        bool IsDisconnecting { get; }
 
         /// <summary>
         /// Start listening for connections. (server)
