@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CS3103Assignment4
 {
@@ -38,6 +36,9 @@ namespace CS3103Assignment4
         private const float MissingPacketTimeout = 0.2f;
 
         private bool _toldRemoteThatSelfHaveNoDataDuringDisconnecting;
+
+        private ReliableMetricsCollector _metrics = new ReliableMetricsCollector();
+        private Dictionary<uint, DateTime> _sendTimestamps = new Dictionary<uint, DateTime>();
 
         public void ListenForConnection()
         {
@@ -197,12 +198,14 @@ namespace CS3103Assignment4
             this._remoteReceivedInOrderPacketLastSequenceID = 0;
             this.WriteControlMessagePacketAndSendImmediately(ControlMessageType.ConnectionRequestThirdHandshake, this._sequenceNumber, out _);
             this._reliableChannelState = ReliableChannelState.Connected;
+            this._metrics.Start();
             this.Log("connection established (received response)");
         }
 
         private void ProcessConnectionRequestThirdHandshakePacket()
         {
             this._reliableChannelState = ReliableChannelState.Connected;
+            this._metrics.Start();
             this.Log("connection established (third handshake)");
         }
 
@@ -264,6 +267,8 @@ namespace CS3103Assignment4
                 }
             }
 
+            _metrics.AddReceivedPackets(userData.Length);
+
             TryProcessInOrderPackets();
         }
 
@@ -310,6 +315,12 @@ namespace CS3103Assignment4
             this.Log("received acknowledgement of " + sequenceID);
             if (this._sentPackets.ContainsKey(sequenceID))
             {
+                if (this._sendTimestamps.TryGetValue(sequenceID, out DateTime sentTime))
+                {
+                    double rtt = (DateTime.Now - sentTime).TotalMilliseconds;
+                    this._metrics.AddRTT(rtt);
+                    this._sendTimestamps.Remove(sequenceID);
+                }
                 this._sentPackets.Remove(sequenceID);
             }
             uint expectedInOrderSequenceID = this._remoteReceivedInOrderPacketLastSequenceID + 1;
@@ -386,6 +397,8 @@ namespace CS3103Assignment4
             byte[] packet;
             this.WritePacket(ControlMessageType.UserData, this._sequenceNumber, data, data.Length, out packet);
             this._sentPackets.Add(this._sequenceNumber, new SentDataPacket(packet));
+            this._sendTimestamps[this._sequenceNumber] = DateTime.Now;
+            this._metrics.AddSentPackets();
             this.ResetSendBufferWriteIndex();
             return packet;
         }
@@ -395,6 +408,11 @@ namespace CS3103Assignment4
             byte[][] packets = this._readyData.ToArray();
             this._readyData.Clear();
             return packets;
+        }
+
+        public override void PrintMetrics()
+        {
+            this._metrics.PrintSummary();
         }
 
         private enum ControlMessageType : byte
@@ -443,6 +461,41 @@ namespace CS3103Assignment4
         Connected,
         Disconnecting,
     }
+
+    class ReliableMetricsCollector : BaseMetricsCollector
+    {
+        string name = "Reliable Channel";
+        private List<double> rtts = new List<double>();
+
+        public void AddRTT(double rtt)
+        {
+            this.rtts.Add(rtt);
+        }
+
+        public override void PrintSummary()
+        {
+            if (this.rtts.Count == 0)
+            {
+                Console.WriteLine($"[{this.name}] No RTT samples recorded");
+                return;
+            }
+
+            double avgRtt = this.rtts.Average();
+            double avgLatency = avgRtt / 2.0;
+            double jitter = ComputeJitter();
+            double throughput = ComputeThroughput();
+            double pdr = ComputePDR();
+            double duration = (DateTime.Now - this.connectionStartTime).TotalSeconds;
+
+            Console.WriteLine($"\n=== {this.name} Metrics Summary ===");
+            Console.WriteLine($"Average RTT: {avgRtt:F3} ms");
+            Console.WriteLine($"Average Latency: {avgLatency:F3} ms");
+            Console.WriteLine($"Average Jitter: {jitter:F3} ms");
+            Console.WriteLine($"Throughput: {throughput:F2} bytes/sec");
+            Console.WriteLine($"Packet Delivery Ratio: {pdr:F2}%");
+            Console.WriteLine($"Test Duration: {duration:F2} sec");
+            Console.WriteLine("==========================\n");
+        }
+    }
+    
 }
-
-
