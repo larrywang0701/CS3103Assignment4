@@ -24,12 +24,13 @@ namespace CS3103Assignment4
         private Random _random = new Random(0);
         private float _packetLossRate;
         private float _maximumLatency;
+        private float _reorderRate;
 
         // Buffers for in-flight packets (simulate latency)
         private List<BufferedPacket> _buffer_ToServer = new List<BufferedPacket>();
         private List<BufferedPacket> _buffer_ToClient = new List<BufferedPacket>();
 
-        public TestChannel(float packetLossRate, float maximumLatency, ushort serverSocketPort, ushort clientSocketPort, ushort packetFromClientForwardToPort, ushort packetFromServerForwardToPort)
+        public TestChannel(float packetLossRate, float maximumLatency, float reorderRate, ushort serverSocketPort, ushort clientSocketPort, ushort packetFromClientForwardToPort, ushort packetFromServerForwardToPort)
         {
             this._serverSocketEndPoint = new IPEndPoint(IPAddress.Any, serverSocketPort);
             this._clientSocketEndPoint = new IPEndPoint(IPAddress.Any, clientSocketPort);
@@ -42,6 +43,7 @@ namespace CS3103Assignment4
             this._clientSocket.Client.Bind(this._clientSocketEndPoint);
             this._packetLossRate = packetLossRate;
             this._maximumLatency = maximumLatency;
+            this._reorderRate = reorderRate;
         }
 
         public void Tick(float deltaTime)
@@ -86,7 +88,7 @@ namespace CS3103Assignment4
 
             var ready = buffer.Where(p => p.LatencyTimer <= 0).ToList();
 
-            if (ready.Count > 1 && _random.NextDouble() < 0.3)
+            if (ready.Count > 1 && _random.NextDouble() < this._reorderRate)
             {
                 ready = ready.OrderBy(_ => _random.Next()).ToList(); 
             }

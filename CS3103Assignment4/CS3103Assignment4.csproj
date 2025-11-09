@@ -44,6 +44,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Channel.cs" />
+    <Compile Include="BaseMetricsCollector.cs" />
     <Compile Include="GameNet.cs" />
     <Compile Include="IGameNetAPI.cs" />
     <Compile Include="Program.cs" />

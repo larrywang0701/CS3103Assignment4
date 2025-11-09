@@ -1,10 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CS3103Assignment4
 {
@@ -71,6 +68,12 @@ namespace CS3103Assignment4
         public void Disconnect()
         {
             this._reliableChannel.StartDisconnecting();
+        }
+
+        public void PrintMetrics()
+        {
+            this._reliableChannel.PrintMetrics();
+            this._unreliableChannel.PrintMetrics();
         }
 
         private byte[] EncapsulateData(ChannelType channelType, long timeStamp, byte[] data)

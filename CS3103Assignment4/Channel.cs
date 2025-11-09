@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace CS3103Assignment4
 {
@@ -19,5 +15,7 @@ namespace CS3103Assignment4
         public abstract void OnReceivedData(byte[] data);
 
         public abstract byte[][] GetPackets();
+
+        public abstract void PrintMetrics();
     }
 }
